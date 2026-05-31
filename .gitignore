@@ -1,0 +1,27 @@
+# Environment
+.env
+.env.local
+*.pyc
+__pycache__/
+.Python
+
+# Streamlit
+.streamlit/
+.streamlit_build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Cache
+.cache/
+*.cache
