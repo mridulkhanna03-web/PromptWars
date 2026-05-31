@@ -8,7 +8,7 @@ load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not API_KEY:
-    st.error("❌ GEMINI_API_KEY not found in .env file. Please set it and refresh.")
+    st.error("GEMINI_API_KEY not found in .env file. Please set it and refresh.")
     st.stop()
 
 genai.configure(api_key=API_KEY)
@@ -97,12 +97,12 @@ def parse_itinerary_json(text: str) -> dict | None:
 def call_gemini(prompt: str, temperature: float = 0.8) -> str:
     """Call Gemini API with given prompt."""
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-pro")
         response = model.generate_content(
             prompt,
             generation_config={
                 "temperature": temperature,
-                "max_output_tokens": 8192
+                "max_output_tokens": 4096
             }
         )
         return response.text
