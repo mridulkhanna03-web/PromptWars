@@ -372,3 +372,37 @@ def parse_wiki_summary_image(summary_json: dict) -> tuple[str | None, str | None
         return None, None
     title = summary_json.get("title") or "location"
     return url, f"Photo of {title}"
+
+
+# ---------------------------------------------------------------------------
+# Openverse image helpers (keyless API that returns relevant photos for ANY
+# query — landmarks, dishes, neighbourhoods). Network fetch lives in app.py.
+# ---------------------------------------------------------------------------
+
+def openverse_search_url(query: str, page_size: int = 1) -> str:
+    """Build the Openverse image-search API URL for a free-text query."""
+    return f"https://api.openverse.org/v1/images/?q={quote(query)}&page_size={page_size}&mature=false"
+
+
+def parse_openverse_image(data: dict) -> tuple[str | None, str | None]:
+    """Extract ``(thumbnail_url, alt_text)`` from an Openverse search response."""
+    if not isinstance(data, dict):
+        return None, None
+    results = data.get("results") or []
+    if not results:
+        return None, None
+    first = results[0]
+    url = first.get("thumbnail") or first.get("url")
+    if not url:
+        return None, None
+    title = first.get("title") or "location"
+    return url, f"Photo: {title}"
+
+
+# ---------------------------------------------------------------------------
+# Maps
+# ---------------------------------------------------------------------------
+
+def gmaps_link(lat, lng) -> str:
+    """Build a Google Maps link that opens the exact coordinates."""
+    return f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"

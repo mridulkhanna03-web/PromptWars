@@ -286,6 +286,29 @@ def test_parse_wiki_summary_image():
     assert planner.parse_wiki_summary_image({"thumbnail": {}}) == (None, None)
 
 
+def test_openverse_search_url_encodes_query():
+    u = planner.openverse_search_url("Eiffel Tower", page_size=3)
+    assert "q=Eiffel%20Tower" in u
+    assert "page_size=3" in u
+    assert "mature=false" in u
+
+
+def test_parse_openverse_image():
+    data = {"results": [{"title": "Eiffel Tower", "thumbnail": "http://t/1", "url": "http://u/1"}]}
+    assert planner.parse_openverse_image(data) == ("http://t/1", "Photo: Eiffel Tower")
+    # Falls back to url when thumbnail missing
+    assert planner.parse_openverse_image({"results": [{"url": "http://u/2"}]}) == ("http://u/2", "Photo: location")
+    assert planner.parse_openverse_image({"results": []}) == (None, None)
+    assert planner.parse_openverse_image({}) == (None, None)
+    assert planner.parse_openverse_image(None) == (None, None)
+
+
+def test_gmaps_link():
+    assert planner.gmaps_link(48.8584, 2.2945) == (
+        "https://www.google.com/maps/search/?api=1&query=48.8584,2.2945"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Schema sanity
 # ---------------------------------------------------------------------------

@@ -250,35 +250,24 @@ def generate_itinerary(prefs: dict, use_realtime: bool = True) -> tuple[dict, bo
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def fetch_place_image(query: str, use_search: bool = False) -> tuple[str | None, str | None]:
-    """Return (image_url, alt_text) for a place, or (None, None) if unavailable."""
+def fetch_image(query: str) -> tuple[str | None, str | None]:
+    """Return (image_url, alt_text) for any query via Openverse, or (None, None).
+
+    Openverse returns relevant, openly-licensed photos for landmarks, dishes, and
+    neighbourhoods alike, so per-activity images load reliably. Cached + graceful.
+    """
     if not query or not query.strip():
         return None, None
-
-    def _get_json(url):
-        req = urllib.request.Request(url, headers={"User-Agent": "TravelPlannerEngine/1.0"})
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-
     try:
-        title = query.strip()
-        if use_search:
-            search = _get_json(planner.wiki_search_url(query))
-            title = planner.parse_wiki_search_title(search) or title
-        summary = _get_json(planner.wiki_summary_url(title))
-        return planner.parse_wiki_summary_image(summary)
+        req = urllib.request.Request(
+            planner.openverse_search_url(query),
+            headers={"User-Agent": "TravelPlannerEngine/1.0 (hackathon demo)"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return planner.parse_openverse_image(data)
     except Exception:
         return None, None
-
-
-def get_day_image(day: dict) -> tuple[str | None, str | None]:
-    """Find a representative photo for a day by trying its activities' landmarks."""
-    for activity in day.get("activities", [])[:4]:
-        for candidate in (activity.get("title", ""), activity.get("location", "")):
-            url, alt = fetch_place_image(candidate)
-            if url:
-                return url, alt
-    return None, None
 
 
 def render_image(url: str, alt: str, css_class: str):
@@ -294,36 +283,49 @@ def render_image(url: str, alt: str, css_class: str):
 # Rendering
 # ---------------------------------------------------------------------------
 
-def render_map(itinerary: dict):
-    """Plot every activity on an interactive map, color-coded by day."""
-    rows = planner.build_map_rows(itinerary)
+def render_day_map(day: dict):
+    """Plot one day's stops on a compact interactive map, in context with that day."""
+    rows = planner.build_map_rows({"days": [day]})
     if not rows:
-        st.caption("Map unavailable — no coordinates for this itinerary.")
         return
-
     df = pd.DataFrame(rows)
     layer = pdk.Layer(
         "ScatterplotLayer",
         data=df,
         get_position="[lng, lat]",
         get_fill_color="color",
-        get_radius=120,
-        radius_min_pixels=6,
-        radius_max_pixels=18,
+        get_radius=70,
+        radius_min_pixels=7,
+        radius_max_pixels=16,
         pickable=True,
     )
-    view = pdk.ViewState(latitude=df["lat"].mean(), longitude=df["lng"].mean(), zoom=11)
-    tooltip = {"html": "<b>Day {day} · {time}</b><br/>{title}<br/>{location}"}
-    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view, tooltip=tooltip))
+    spread = max(df["lat"].max() - df["lat"].min(), df["lng"].max() - df["lng"].min())
+    zoom = 14 if spread < 0.02 else 13 if spread < 0.06 else 12
+    view = pdk.ViewState(latitude=df["lat"].mean(), longitude=df["lng"].mean(), zoom=zoom)
+    tooltip = {"html": "<b>{time}</b><br/>{title}<br/>{location}"}
+    st.pydeck_chart(
+        pdk.Deck(layers=[layer], initial_view_state=view, tooltip=tooltip),
+        use_container_width=True,
+    )
 
-    legend = "&nbsp;&nbsp;".join(
-        f"<span style='color:rgb({c[0]},{c[1]},{c[2]});font-size:1.1em'>●</span> Day {d}"
-        for d, c in sorted({r["day"]: r["color"] for r in rows}.items())
-    )
-    st.markdown(
-        f"<div role='note' aria-label='Map legend' style='font-size:0.95em;color:#1a1a2e'>{legend}</div>",
-        unsafe_allow_html=True,
-    )
+
+def render_budget(itinerary: dict, prefs: dict):
+    """Easy-to-read budget usage: a progress bar plus per-day cost metrics."""
+    total = itinerary.get("estimated_total_cost", 0)
+    budget = prefs["budget"]
+    cur = prefs["currency"]
+    pct = min(total / budget, 1.0) if budget else 0.0
+    if total > budget:
+        tail = f"OVER by {cur} {total - budget:,.0f}"
+    else:
+        tail = f"{cur} {budget - total:,.0f} remaining"
+    st.progress(pct, text=f"{cur} {total:,.0f} of {cur} {budget:,.0f} used · {tail} ({pct * 100:.0f}%)")
+
+    breakdown = planner.cost_breakdown_by_day(itinerary)
+    if breakdown:
+        cols = st.columns(len(breakdown))
+        for col, d in zip(cols, breakdown):
+            col.metric(f"Day {d['day']}", f"{cur} {d['cost']:,.0f}")
 
 
 def render_constraint_panel(itinerary: dict, prefs: dict):
@@ -374,7 +376,7 @@ def render_itinerary(itinerary: dict, prefs: dict):
     cur = prefs["currency"]
 
     # Destination hero photo
-    hero_url, hero_alt = fetch_place_image(prefs["destination"], use_search=True)
+    hero_url, hero_alt = fetch_image(prefs["destination"])
     if hero_url:
         render_image(hero_url, hero_alt or f"Photo of {prefs['destination']}", "hero-img")
 
@@ -397,40 +399,43 @@ def render_itinerary(itinerary: dict, prefs: dict):
 
     render_constraint_panel(itinerary, prefs)
 
-    st.markdown("#### 💸 Cost by day")
-    render_cost_breakdown(itinerary, prefs)
-
-    st.markdown("#### 🗺️ Trip map")
-    render_map(itinerary)
+    st.markdown("#### 💸 Budget")
+    render_budget(itinerary, prefs)
 
     st.markdown("#### 🗓️ Day-by-day plan")
     for day in itinerary.get("days", []):
         day_num = day.get("day", "?")
         theme = day.get("theme", "")
         with st.expander(f"Day {day_num} — {theme}", expanded=(day_num == 1)):
-            img_col, list_col = st.columns([1, 2])
-            with img_col:
-                url, alt = get_day_image(day)
-                if url:
-                    render_image(url, alt or f"Photo from day {day_num}", "act-img")
-                else:
-                    st.markdown(
-                        f"<div class='act-img' style='background:linear-gradient(135deg,#1e3a8a,#6d28d9);"
-                        f"display:flex;align-items:center;justify-content:center;color:#fff;font-size:2rem' "
-                        f"role='img' aria-label='Day {day_num}'>🏙️</div>",
-                        unsafe_allow_html=True,
-                    )
-            with list_col:
-                for activity in day.get("activities", []):
-                    title = activity.get("title", "?")
-                    time = activity.get("time", "?")
-                    location = activity.get("location", "?")
-                    cost = activity.get("estimated_cost", 0)
-                    mins = activity.get("duration_minutes", 0)
+            # This day's stops on a map, shown in context above the activities
+            render_day_map(day)
+            for activity in day.get("activities", []):
+                title = activity.get("title", "?")
+                time = activity.get("time", "?")
+                location = activity.get("location", "?")
+                cost = activity.get("estimated_cost", 0)
+                mins = activity.get("duration_minutes", 0)
+                lat, lng = activity.get("lat"), activity.get("lng")
+
+                img_col, info_col = st.columns([1, 2])
+                with img_col:
+                    url, alt = fetch_image(f"{title} {prefs['destination']}")
+                    if url:
+                        render_image(url, alt or title, "act-img")
+                    else:
+                        st.markdown(
+                            f"<div class='act-img' style='background:linear-gradient(135deg,#06b6d4,#6366f1);"
+                            f"display:flex;align-items:center;justify-content:center;color:#fff;font-size:2rem' "
+                            f"role='img' aria-label='{title}'>📍</div>",
+                            unsafe_allow_html=True,
+                        )
+                with info_col:
                     st.markdown(f"**{title}**  ·  🕐 {time}")
                     st.markdown(activity.get("description", ""))
                     st.markdown(f"📍 {location}  ·  💰 {cur} {cost:.0f}  ·  ⏱️ {mins} min")
-                    st.markdown("---")
+                    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and (lat or lng):
+                        st.markdown(f"[🗺️ Open in Google Maps]({planner.gmaps_link(lat, lng)})")
+                st.markdown("---")
 
     if st.session_state.correction_applied:
         st.info("ℹ️ Budget correction pass applied — costs were adjusted to fit your budget.")
