@@ -39,6 +39,10 @@ if "correction_applied" not in st.session_state:
     st.session_state.correction_applied = False
 if "disruption_applied" not in st.session_state:
     st.session_state.disruption_applied = False
+if "sources" not in st.session_state:
+    st.session_state.sources = []
+if "realtime_summary" not in st.session_state:
+    st.session_state.realtime_summary = ""
 
 
 # JSON schema enforced natively by Gemini (no manual parsing / code-fence stripping needed)
@@ -107,12 +111,57 @@ def call_gemini_json(prompt: str, temperature: float = 0.8) -> dict:
         raise ValueError(f"Failed to parse Gemini response as JSON:\n\n{response.text}")
 
 
-def build_initial_prompt(prefs: dict) -> str:
-    """Build the initial trip planning prompt."""
+def grounded_research(query: str, temperature: float = 0.4) -> tuple[str, list[dict]]:
+    """Run a Google Search-grounded query. Returns (summary_text, sources).
+
+    Grounding can't be combined with response_schema on Gemini 2.5, so this is a
+    separate 'research' step whose factual output is fed into the structured
+    planning step. Degrades gracefully (returns empty) if grounding is unavailable.
+    """
+    try:
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=query,
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=temperature,
+            ),
+        )
+    except Exception:
+        return "", []
+
+    text = response.text or ""
+    sources: list[dict] = []
+    try:
+        gm = response.candidates[0].grounding_metadata
+        if gm and gm.grounding_chunks:
+            seen = set()
+            for chunk in gm.grounding_chunks:
+                web = getattr(chunk, "web", None)
+                if web and web.uri and web.uri not in seen:
+                    seen.add(web.uri)
+                    sources.append({"title": web.title or web.uri, "uri": web.uri})
+    except (AttributeError, IndexError):
+        pass
+    return text, sources
+
+
+def build_initial_prompt(prefs: dict, realtime_context: str = "") -> str:
+    """Build the initial trip planning prompt, optionally grounded in real-time data."""
     interests_str = ", ".join(prefs["interests"]) if prefs["interests"] else "general sightseeing"
     dietary_str = ", ".join(prefs["dietary_needs"]) if prefs["dietary_needs"] else "no restrictions"
     must_see_str = prefs["must_see"] if prefs["must_see"] else "none specified"
     avoid_str = prefs["avoid"] if prefs["avoid"] else "nothing specified"
+
+    context_block = ""
+    if realtime_context.strip():
+        context_block = f"""
+Use the following REAL-TIME information (from live web search) to make the plan accurate
+about weather, current prices, opening hours, and any closures or events:
+\"\"\"
+{realtime_context.strip()}
+\"\"\"
+"""
 
     return f"""You are an expert travel planner. Create a detailed, day-by-day itinerary based on:
 
@@ -124,7 +173,7 @@ Travel Pace: {prefs['travel_pace']}
 Dietary Needs: {dietary_str}
 Must-See Places: {must_see_str}
 Things to Avoid: {avoid_str}
-
+{context_block}
 Create a realistic, enjoyable itinerary that:
 1. Stays within the total budget (the sum of all estimated_cost values must be <= the budget)
 2. Respects the travel pace (Relaxed = 2-3 activities/day, Balanced = 4-5, Packed = 6+)
@@ -132,6 +181,7 @@ Create a realistic, enjoyable itinerary that:
 4. Includes realistic, location-appropriate cost estimates for each activity
 5. Includes every must-see place and excludes everything in the avoid list
 6. Orders activities sensibly within each day (group nearby places, logical time flow)
+7. Reflects the real-time information above when provided (weather-appropriate activities, current prices)
 
 Set estimated_total_cost to the exact sum of every activity's estimated_cost."""
 
@@ -160,15 +210,24 @@ Set estimated_total_cost to the exact new sum."""
     return call_gemini_json(prompt, temperature=0.7)
 
 
-def apply_disruption(itinerary: dict, disruption: str, prefs: dict) -> dict:
-    """Apply a disruption and re-plan affected parts."""
+def apply_disruption(itinerary: dict, disruption: str, prefs: dict, realtime_context: str = "") -> dict:
+    """Apply a disruption and re-plan affected parts, optionally grounded in real-time data."""
+    context_block = ""
+    if realtime_context.strip():
+        context_block = f"""
+Real-time information relevant to this disruption (from live web search):
+\"\"\"
+{realtime_context.strip()}
+\"\"\"
+"""
+
     prompt = f"""You are re-planning a travel itinerary due to a real-time disruption.
 
 Current itinerary:
 {json.dumps(itinerary, indent=2)}
 
 Disruption: {disruption}
-
+{context_block}
 Trip context:
 - Destination: {prefs['destination']}
 - Interests: {', '.join(prefs['interests']) if prefs['interests'] else 'general'}
@@ -176,22 +235,52 @@ Trip context:
 - Budget: {prefs['currency']} {prefs['budget']}
 
 Re-plan only the affected days/activities while keeping all unaffected days intact.
+Use the real-time information above when deciding replacements (e.g. weather-appropriate alternatives).
 Maintain the same trip duration and respect the original budget.
 Set estimated_total_cost to the exact new sum of all activity costs."""
 
     return call_gemini_json(prompt, temperature=0.7)
 
 
-def generate_itinerary(prefs: dict) -> tuple[dict, bool]:
-    """Generate itinerary with budget validation."""
-    itinerary = call_gemini_json(build_initial_prompt(prefs))
+def research_destination(prefs: dict) -> tuple[str, list[dict]]:
+    """Grounded research step: gather real-time intel about the destination."""
+    query = (
+        f"Provide concise, current, practical travel intel for a trip to {prefs['destination']}. "
+        f"Cover: typical weather this time of year, any major attraction closures or notable events "
+        f"happening soon, and approximate current prices (in {prefs['currency']}) for top attractions, "
+        f"local meals, and transport. Keep it factual and brief."
+    )
+    return grounded_research(query)
+
+
+def research_disruption(disruption: str, prefs: dict) -> tuple[str, list[dict]]:
+    """Grounded research step: gather real-time facts relevant to a disruption."""
+    query = (
+        f"For a trip in {prefs['destination']}, regarding this situation: \"{disruption}\". "
+        f"Provide the current real-world facts needed to re-plan: actual current/forecast weather if "
+        f"relevant, whether any named place is open today, and realistic nearby alternatives. "
+        f"Keep it factual and brief."
+    )
+    return grounded_research(query)
+
+
+def generate_itinerary(prefs: dict, use_realtime: bool = True) -> tuple[dict, bool, str, list[dict]]:
+    """Generate itinerary with optional real-time grounding and budget validation.
+
+    Returns (itinerary, correction_applied, realtime_summary, sources).
+    """
+    realtime_summary, sources = ("", [])
+    if use_realtime:
+        realtime_summary, sources = research_destination(prefs)
+
+    itinerary = call_gemini_json(build_initial_prompt(prefs, realtime_summary))
 
     correction_applied = False
     if itinerary.get("estimated_total_cost", 0) > prefs["budget"]:
         itinerary = revise_for_budget(itinerary, prefs["budget"], prefs["currency"])
         correction_applied = True
 
-    return itinerary, correction_applied
+    return itinerary, correction_applied, realtime_summary, sources
 
 
 def render_itinerary(itinerary: dict, prefs: dict):
@@ -205,6 +294,16 @@ def render_itinerary(itinerary: dict, prefs: dict):
         st.error(f"❌ Total Cost: {prefs['currency']} {total_cost:.2f} (Budget: {prefs['currency']} {budget:.2f})")
 
     st.info(itinerary.get("trip_summary", ""))
+
+    # Real-time grounding panel (weather, prices, closures) with citations
+    if st.session_state.realtime_summary or st.session_state.sources:
+        with st.expander("🌐 Real-time data used (Google Search grounding)", expanded=False):
+            if st.session_state.realtime_summary:
+                st.markdown(st.session_state.realtime_summary)
+            if st.session_state.sources:
+                st.markdown("**Sources:**")
+                for s in st.session_state.sources:
+                    st.markdown(f"- [{s['title']}]({s['uri']})")
 
     for day in itinerary.get("days", []):
         day_num = day.get("day", "?")
@@ -270,6 +369,13 @@ with st.sidebar:
     must_see = st.text_area("Must-See Places (optional)", placeholder="e.g., Eiffel Tower, Louvre Museum")
     avoid = st.text_area("Things to Avoid (optional)", placeholder="e.g., crowded areas, expensive restaurants")
 
+    st.divider()
+    use_realtime = st.toggle(
+        "🌐 Use real-time data (Google Search)",
+        value=True,
+        help="Grounds the plan in live weather, current prices, opening hours, and closures — with cited sources.",
+    )
+
     generate_btn = st.button("🚀 Generate Itinerary", key="gen_btn", use_container_width=True)
 
 if generate_btn:
@@ -290,14 +396,17 @@ if generate_btn:
             "avoid": avoid,
         }
         try:
-            with st.spinner("🤔 Planning your trip..."):
-                itinerary, corrected = generate_itinerary(prefs)
+            status_msg = "🌐 Researching real-time conditions, then planning..." if use_realtime else "🤔 Planning your trip..."
+            with st.spinner(status_msg):
+                itinerary, corrected, summary, sources = generate_itinerary(prefs, use_realtime)
                 # Snapshot the prefs that produced this itinerary so the rendered
                 # cost summary and disruptions stay consistent if the sidebar changes.
                 st.session_state.itinerary = itinerary
                 st.session_state.prefs = prefs
                 st.session_state.correction_applied = corrected
                 st.session_state.disruption_applied = False
+                st.session_state.realtime_summary = summary
+                st.session_state.sources = sources
                 st.rerun()
         except Exception as e:
             st.error(f"❌ Error generating itinerary: {str(e)}")
@@ -329,10 +438,18 @@ if st.session_state.itinerary and st.session_state.prefs:
     if st.button("Apply Disruption", key="disrupt_btn", use_container_width=True):
         if disruption:
             try:
-                with st.spinner("⚡ Re-planning affected parts..."):
-                    updated = apply_disruption(st.session_state.itinerary, disruption, prefs)
+                spin = "🌐 Checking real-time conditions, then re-planning..." if use_realtime else "⚡ Re-planning affected parts..."
+                with st.spinner(spin):
+                    summary, sources = ("", [])
+                    if use_realtime:
+                        summary, sources = research_disruption(disruption, prefs)
+                    updated = apply_disruption(st.session_state.itinerary, disruption, prefs, summary)
                     st.session_state.itinerary = updated
                     st.session_state.disruption_applied = True
+                    # Surface the disruption's real-time research in place of the prior panel
+                    if use_realtime and (summary or sources):
+                        st.session_state.realtime_summary = summary
+                        st.session_state.sources = sources
                     st.rerun()
             except Exception as e:
                 st.error(f"❌ Error applying disruption: {str(e)}")
