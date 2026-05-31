@@ -309,6 +309,37 @@ def test_gmaps_link():
     )
 
 
+def test_clean_activity_title():
+    assert planner.clean_activity_title("Eiffel Tower Ascent (Second Floor by Lift)") == "Eiffel Tower Ascent"
+    assert planner.clean_activity_title("Lunch: Classic Parisian Sandwich") == "Classic Parisian Sandwich"
+    assert planner.clean_activity_title("Stroll - Seine Riverbank") == "Seine Riverbank"
+    assert planner.clean_activity_title("Louvre Museum") == "Louvre Museum"
+
+
+def test_build_image_query_prefers_clean_venue_name():
+    # Location is a clean venue name -> use it, add destination
+    act = {"title": "Eiffel Tower Ascent (Second Floor by Lift)",
+           "location": "Champ de Mars, 5 Avenue Anatole France, 75007 Paris"}
+    assert planner.build_image_query(act, "Paris") == "Champ de Mars Paris"
+
+
+def test_build_image_query_falls_back_when_location_is_address():
+    # Location's first segment has digits (street address) -> use cleaned title
+    act = {"title": "Musée d'Orsay", "location": "1 Rue de la Légion d'Honneur, 75007 Paris"}
+    assert planner.build_image_query(act, "Paris") == "Musée d'Orsay Paris"
+
+
+def test_build_image_query_handles_vague_location():
+    act = {"title": "Lunch: Local Bistro", "location": "Various"}
+    assert planner.build_image_query(act, "Rome") == "Local Bistro Rome"
+
+
+def test_build_image_query_does_not_duplicate_destination():
+    act = {"title": "Tokyo Tower", "location": "Tokyo Tower, Tokyo"}
+    q = planner.build_image_query(act, "Tokyo")
+    assert q == "Tokyo Tower"  # destination already present, not appended twice
+
+
 # ---------------------------------------------------------------------------
 # Schema sanity
 # ---------------------------------------------------------------------------

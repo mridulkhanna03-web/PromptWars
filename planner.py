@@ -6,6 +6,7 @@ and wires them to the Gemini client and the Streamlit UI.
 """
 
 import json
+import re
 import unicodedata
 from urllib.parse import quote
 
@@ -397,6 +398,41 @@ def parse_openverse_image(data: dict) -> tuple[str | None, str | None]:
         return None, None
     title = first.get("title") or "location"
     return url, f"Photo: {title}"
+
+
+def clean_activity_title(title: str) -> str:
+    """Strip parentheticals and leading meal/verb labels from an activity title."""
+    t = re.sub(r"\(.*?\)", "", title or "")
+    t = re.sub(
+        r"^\s*(lunch|dinner|breakfast|brunch|snack|visit|explore|tour|stroll|walk)\s*[:\-]\s*",
+        "", t, flags=re.IGNORECASE,
+    )
+    return t.strip()
+
+
+def build_image_query(activity: dict, destination: str = "") -> str:
+    """Pick the most image-friendly search query for an activity.
+
+    Prefers the venue name (first segment of ``location``) since that is the real
+    place; falls back to the cleaned title when the location is a street address
+    (contains digits) or is vague. The destination is appended for context.
+    """
+    location = (activity.get("location") or "").strip()
+    title = (activity.get("title") or "").strip()
+
+    primary = location.split(",")[0].strip() if location else ""
+    vague = {"", "various", "various locations", "city center", "city centre", "downtown"}
+    if (
+        primary.lower() in vague
+        or len(primary) < 3
+        or any(ch.isdigit() for ch in primary)
+    ):
+        primary = clean_activity_title(title)
+
+    query = (primary or title or destination).strip()
+    if destination and destination.lower() not in query.lower():
+        query = f"{query} {destination}".strip()
+    return query
 
 
 # ---------------------------------------------------------------------------

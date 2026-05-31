@@ -419,7 +419,7 @@ def render_itinerary(itinerary: dict, prefs: dict):
 
                 img_col, info_col = st.columns([1, 2])
                 with img_col:
-                    url, alt = fetch_image(f"{title} {prefs['destination']}")
+                    url, alt = fetch_image(planner.build_image_query(activity, prefs["destination"]))
                     if url:
                         render_image(url, alt or title, "act-img")
                     else:
