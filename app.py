@@ -1,5 +1,8 @@
 import os
 import json
+import unicodedata
+import pandas as pd
+import pydeck as pdk
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -43,6 +46,8 @@ if "sources" not in st.session_state:
     st.session_state.sources = []
 if "realtime_summary" not in st.session_state:
     st.session_state.realtime_summary = ""
+if "prev_itinerary" not in st.session_state:
+    st.session_state.prev_itinerary = None
 
 
 # JSON schema enforced natively by Gemini (no manual parsing / code-fence stripping needed)
@@ -69,10 +74,13 @@ ITINERARY_SCHEMA = {
                                 "location": {"type": "string"},
                                 "estimated_cost": {"type": "number"},
                                 "duration_minutes": {"type": "integer"},
+                                "lat": {"type": "number"},
+                                "lng": {"type": "number"},
                             },
                             "required": [
                                 "time", "title", "description",
                                 "location", "estimated_cost", "duration_minutes",
+                                "lat", "lng",
                             ],
                         },
                     },
@@ -183,6 +191,8 @@ Create a realistic, enjoyable itinerary that:
 6. Orders activities sensibly within each day (group nearby places, logical time flow)
 7. Reflects the real-time information above when provided (weather-appropriate activities, current prices)
 
+For every activity, set "lat" and "lng" to the real-world latitude/longitude of that location
+(your best precise estimate for the named place; never 0).
 Set estimated_total_cost to the exact sum of every activity's estimated_cost."""
 
 
@@ -237,6 +247,7 @@ Trip context:
 Re-plan only the affected days/activities while keeping all unaffected days intact.
 Use the real-time information above when deciding replacements (e.g. weather-appropriate alternatives).
 Maintain the same trip duration and respect the original budget.
+For every activity, set "lat" and "lng" to the real-world coordinates of that location (never 0).
 Set estimated_total_cost to the exact new sum of all activity costs."""
 
     return call_gemini_json(prompt, temperature=0.7)
@@ -283,6 +294,187 @@ def generate_itinerary(prefs: dict, use_realtime: bool = True) -> tuple[dict, bo
     return itinerary, correction_applied, realtime_summary, sources
 
 
+# Distinct colors (RGB) cycled per day for the map
+DAY_COLORS = [
+    [228, 26, 28], [55, 126, 184], [77, 175, 74], [152, 78, 163],
+    [255, 127, 0], [166, 86, 40], [247, 129, 191], [153, 153, 153],
+]
+
+
+def render_map(itinerary: dict):
+    """Plot every activity on an interactive map, color-coded by day."""
+    rows = []
+    for day in itinerary.get("days", []):
+        day_num = day.get("day", 0)
+        color = DAY_COLORS[(day_num - 1) % len(DAY_COLORS)]
+        for activity in day.get("activities", []):
+            lat, lng = activity.get("lat"), activity.get("lng")
+            if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and (lat or lng):
+                rows.append({
+                    "lat": float(lat), "lng": float(lng),
+                    "day": day_num, "title": activity.get("title", ""),
+                    "location": activity.get("location", ""),
+                    "time": activity.get("time", ""),
+                    "color": color,
+                })
+
+    if not rows:
+        return
+
+    df = pd.DataFrame(rows)
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=df,
+        get_position="[lng, lat]",
+        get_fill_color="color",
+        get_radius=120,
+        radius_min_pixels=6,
+        radius_max_pixels=18,
+        pickable=True,
+    )
+    view = pdk.ViewState(
+        latitude=df["lat"].mean(),
+        longitude=df["lng"].mean(),
+        zoom=11,
+    )
+    tooltip = {"html": "<b>Day {day} · {time}</b><br/>{title}<br/>{location}"}
+    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view, tooltip=tooltip))
+    legend = "  ".join(
+        f"<span style='color:rgb({c[0]},{c[1]},{c[2]})'>●</span> Day {d}"
+        for d, c in sorted({r["day"]: r["color"] for r in rows}.items())
+    )
+    st.markdown(f"<div style='font-size:0.9em'>{legend}</div>", unsafe_allow_html=True)
+
+
+def validate_constraints(itinerary: dict, prefs: dict) -> list[dict]:
+    """Programmatically check the itinerary against the user's constraints.
+
+    Returns a list of {label, ok, detail} results (ok True = satisfied).
+    """
+    def fold(s: str) -> str:
+        # Lowercase + strip accents so "Park Guell" matches "Park Güell"
+        return "".join(
+            c for c in unicodedata.normalize("NFKD", s.lower())
+            if not unicodedata.combining(c)
+        )
+
+    results = []
+    text = fold(json.dumps(itinerary, ensure_ascii=False))
+
+    # Budget
+    total = itinerary.get("estimated_total_cost", 0)
+    results.append({
+        "label": "Within budget",
+        "ok": total <= prefs["budget"],
+        "detail": f"{prefs['currency']} {total:.0f} of {prefs['currency']} {prefs['budget']:.0f}",
+    })
+
+    # Trip length
+    n_days = len(itinerary.get("days", []))
+    results.append({
+        "label": "Correct trip length",
+        "ok": n_days == prefs["num_days"],
+        "detail": f"{n_days} of {prefs['num_days']} days planned",
+    })
+
+    # Must-see inclusion (each comma/newline-separated item appears somewhere)
+    must = [m.strip() for m in prefs.get("must_see", "").replace("\n", ",").split(",") if m.strip()]
+    if must:
+        missing = [m for m in must if fold(m) not in text]
+        results.append({
+            "label": "Must-see places included",
+            "ok": not missing,
+            "detail": "All included" if not missing else f"Missing: {', '.join(missing)}",
+        })
+
+    # Avoid exclusion
+    avoid = [a.strip() for a in prefs.get("avoid", "").replace("\n", ",").split(",") if a.strip()]
+    if avoid:
+        present = [a for a in avoid if fold(a) in text]
+        results.append({
+            "label": "Avoided items excluded",
+            "ok": not present,
+            "detail": "None present" if not present else f"Found: {', '.join(present)}",
+        })
+
+    # Per-day time feasibility (activities should fit a ~14h / 840min waking day)
+    over = []
+    for day in itinerary.get("days", []):
+        mins = sum(a.get("duration_minutes", 0) for a in day.get("activities", []))
+        if mins > 840:
+            over.append(f"Day {day.get('day')} ({mins // 60}h)")
+    results.append({
+        "label": "Days fit a realistic schedule",
+        "ok": not over,
+        "detail": "All days reasonable" if not over else f"Overpacked: {', '.join(over)}",
+    })
+
+    # Pace adherence (avg activities/day matches selected pace)
+    pace_ranges = {"Relaxed": (2, 3), "Balanced": (4, 5), "Packed": (6, 99)}
+    lo, hi = pace_ranges.get(prefs["travel_pace"], (1, 99))
+    counts = [len(d.get("activities", [])) for d in itinerary.get("days", [])]
+    avg = (sum(counts) / len(counts)) if counts else 0
+    results.append({
+        "label": f"Matches '{prefs['travel_pace']}' pace",
+        "ok": lo <= avg <= hi,
+        "detail": f"{avg:.1f} activities/day (target {lo}–{hi if hi < 99 else '6+'})",
+    })
+
+    return results
+
+
+def render_constraint_panel(itinerary: dict, prefs: dict):
+    """Render the constraint validation checklist."""
+    results = validate_constraints(itinerary, prefs)
+    passed = sum(1 for r in results if r["ok"])
+    total = len(results)
+    header = f"✅ All {total} constraints satisfied" if passed == total else f"⚠️ {passed}/{total} constraints satisfied"
+    with st.expander(header, expanded=(passed != total)):
+        for r in results:
+            icon = "✅" if r["ok"] else "⚠️"
+            st.markdown(f"{icon} **{r['label']}** — {r['detail']}")
+
+
+def diff_itineraries(old: dict, new: dict) -> list[dict]:
+    """Compare two itineraries day-by-day. Returns per-day added/removed activity titles."""
+    def titles_by_day(itin):
+        out = {}
+        for day in itin.get("days", []):
+            out[day.get("day")] = [a.get("title", "") for a in day.get("activities", [])]
+        return out
+
+    old_by, new_by = titles_by_day(old), titles_by_day(new)
+    changes = []
+    for day in sorted(set(old_by) | set(new_by)):
+        before = old_by.get(day, [])
+        after = new_by.get(day, [])
+        added = [t for t in after if t not in before]
+        removed = [t for t in before if t not in after]
+        if added or removed:
+            changes.append({"day": day, "added": added, "removed": removed})
+    return changes
+
+
+def render_diff(old: dict, new: dict):
+    """Show what the disruption changed, with cost delta."""
+    changes = diff_itineraries(old, new)
+    old_cost = old.get("estimated_total_cost", 0)
+    new_cost = new.get("estimated_total_cost", 0)
+    delta = new_cost - old_cost
+
+    with st.expander("🔀 What changed", expanded=True):
+        sign = "+" if delta > 0 else ""
+        st.markdown(f"**Total cost:** {old_cost:.0f} → {new_cost:.0f} ({sign}{delta:.0f})")
+        if not changes:
+            st.caption("Activities unchanged (timing/details may have been adjusted).")
+        for c in changes:
+            st.markdown(f"**Day {c['day']}**")
+            for t in c["removed"]:
+                st.markdown(f"- :red[− {t}]")
+            for t in c["added"]:
+                st.markdown(f"- :green[+ {t}]")
+
+
 def render_itinerary(itinerary: dict, prefs: dict):
     """Render the itinerary in the UI."""
     total_cost = itinerary.get("estimated_total_cost", 0)
@@ -304,6 +496,13 @@ def render_itinerary(itinerary: dict, prefs: dict):
                 st.markdown("**Sources:**")
                 for s in st.session_state.sources:
                     st.markdown(f"- [{s['title']}]({s['uri']})")
+
+    # Constraint validation checklist
+    render_constraint_panel(itinerary, prefs)
+
+    # Interactive map of all stops, color-coded by day
+    st.markdown("##### 🗺️ Trip Map")
+    render_map(itinerary)
 
     for day in itinerary.get("days", []):
         day_num = day.get("day", "?")
@@ -414,6 +613,11 @@ if generate_btn:
 # Render itinerary from the snapshot taken at generation time
 if st.session_state.itinerary and st.session_state.prefs:
     prefs = st.session_state.prefs
+
+    # Show what the most recent disruption changed (before the full itinerary)
+    if st.session_state.disruption_applied and st.session_state.prev_itinerary:
+        render_diff(st.session_state.prev_itinerary, st.session_state.itinerary)
+
     render_itinerary(st.session_state.itinerary, prefs)
 
     st.divider()
@@ -443,6 +647,8 @@ if st.session_state.itinerary and st.session_state.prefs:
                     summary, sources = ("", [])
                     if use_realtime:
                         summary, sources = research_disruption(disruption, prefs)
+                    # Snapshot the pre-disruption plan so we can show a before/after diff
+                    st.session_state.prev_itinerary = st.session_state.itinerary
                     updated = apply_disruption(st.session_state.itinerary, disruption, prefs, summary)
                     st.session_state.itinerary = updated
                     st.session_state.disruption_applied = True
