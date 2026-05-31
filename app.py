@@ -103,11 +103,25 @@ def call_gemini_json(prompt: str, temperature: float = 0.8) -> dict:
                 response_mime_type="application/json",
                 response_schema=ITINERARY_SCHEMA,
                 temperature=temperature,
-                max_output_tokens=8192,
+                max_output_tokens=32768,
+                # Disable "thinking": on Gemini 2.5 it consumes the output-token
+                # budget and can truncate the JSON mid-stream. Off = complete JSON + faster.
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
     except Exception as e:
         raise Exception(f"Gemini API error: {str(e)}")
+
+    # If the model still hit the output ceiling (e.g. a very long trip), say so clearly
+    # rather than failing on a confusing JSON parse error.
+    try:
+        finish_reason = response.candidates[0].finish_reason
+    except (AttributeError, IndexError):
+        finish_reason = None
+    if finish_reason and "MAX_TOKENS" in str(finish_reason):
+        raise ValueError(
+            "The itinerary was too long to return in full. Try fewer days or a less packed pace."
+        )
 
     if not response.text:
         raise ValueError("Gemini returned an empty response. Please try again.")
