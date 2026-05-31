@@ -5,8 +5,8 @@
 __pycache__/
 .Python
 
-# Streamlit
-.streamlit/
+# Streamlit (keep config.toml, hide secrets)
+.streamlit/secrets.toml
 .streamlit_build/
 
 # IDE

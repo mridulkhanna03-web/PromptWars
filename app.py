@@ -50,23 +50,53 @@ def inject_css():
     st.markdown(
         """
         <style>
-        /* Higher-contrast body text for readability (WCAG AA). */
-        .stApp, .stMarkdown, p, li, span { color: #1a1a2e; }
+        .block-container { padding-top: 2.2rem; max-width: 1200px; }
 
-        /* Animated gradient hero. */
+        /* Animated gradient hero — bright, travel-forward, white text. */
         .hero {
-            border-radius: 18px;
-            padding: 2.6rem 2rem;
-            margin-bottom: 1.2rem;
-            background: linear-gradient(120deg, #1e3a8a, #6d28d9, #0e7490, #1e3a8a);
+            border-radius: 20px;
+            padding: 3rem 2rem;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(120deg, #06b6d4, #3b82f6, #6366f1, #06b6d4);
             background-size: 300% 300%;
-            animation: heroShift 12s ease infinite;
-            color: #ffffff;
+            animation: heroShift 14s ease infinite;
             text-align: center;
+            box-shadow: 0 12px 32px rgba(37, 99, 235, 0.25);
         }
-        .hero h1 { color: #ffffff; font-size: 2.4rem; margin: 0 0 .4rem 0; }
-        .hero p { color: #f1f5ff; font-size: 1.1rem; margin: 0; }
-        .hero .plane { font-size: 2.2rem; display: inline-block; animation: floaty 3s ease-in-out infinite; }
+        .hero h1 { color: #ffffff !important; font-size: 2.7rem; font-weight: 800;
+            margin: .3rem 0 .6rem 0; letter-spacing: -0.5px; }
+        .hero p { color: #eef6ff !important; font-size: 1.15rem; margin: 0 auto; max-width: 700px; }
+        .hero .plane { font-size: 2.4rem; display: inline-block; animation: floaty 3s ease-in-out infinite; }
+
+        /* Feature cards. */
+        .feature-grid { display: flex; gap: 1.1rem; flex-wrap: wrap; margin: 1.2rem 0; }
+        .feature-card {
+            flex: 1 1 230px;
+            background: #ffffff;
+            border: 1px solid #e6eaf0;
+            border-radius: 16px;
+            padding: 1.4rem;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+            transition: transform .2s ease, box-shadow .2s ease;
+            animation: fadeUp .6s ease both;
+        }
+        .feature-card:hover { transform: translateY(-4px); box-shadow: 0 12px 26px rgba(15, 23, 42, 0.13); }
+        .feature-card h3 { margin: .4rem 0 .5rem 0; font-size: 1.1rem; color: #0f172a !important; }
+        .feature-card p { font-size: .93rem; color: #475569 !important; margin: 0; line-height: 1.55; }
+        .feature-card .ico { font-size: 2rem; }
+
+        /* Images. */
+        .act-img { width: 100%; height: 160px; object-fit: cover; border-radius: 12px; }
+        .hero-img { width: 100%; max-height: 300px; object-fit: cover; border-radius: 16px;
+            margin-bottom: .7rem; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
+
+        /* Rounded, modern buttons. */
+        .stButton button { border-radius: 10px; font-weight: 600; }
+
+        /* Strong, visible focus outline for keyboard users (accessibility). */
+        button:focus, a:focus, input:focus, select:focus, textarea:focus {
+            outline: 3px solid #2563eb !important; outline-offset: 2px; }
+
         @keyframes heroShift {
             0% { background-position: 0% 50%; }
             50% { background-position: 100% 50%; }
@@ -76,32 +106,10 @@ def inject_css():
             0%, 100% { transform: translateY(0); }
             50% { transform: translateY(-10px); }
         }
-
-        /* Feature cards. */
-        .feature-grid { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
-        .feature-card {
-            flex: 1 1 220px;
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 14px;
-            padding: 1.2rem;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            animation: fadeUp .6s ease both;
-        }
-        .feature-card h3 { margin: .2rem 0 .4rem 0; font-size: 1.05rem; color: #1e293b; }
-        .feature-card p { font-size: .92rem; color: #334155; margin: 0; }
-        .feature-card .ico { font-size: 1.8rem; }
         @keyframes fadeUp {
-            from { opacity: 0; transform: translateY(12px); }
+            from { opacity: 0; transform: translateY(14px); }
             to { opacity: 1; transform: translateY(0); }
         }
-
-        /* Activity image. */
-        .act-img { width: 100%; height: 150px; object-fit: cover; border-radius: 10px; }
-        .hero-img { width: 100%; max-height: 280px; object-fit: cover; border-radius: 14px; margin-bottom: .6rem; }
-
-        /* Visible, strong focus outline for keyboard users. */
-        button:focus, a:focus, input:focus, select:focus { outline: 3px solid #6d28d9 !important; }
         </style>
         """,
         unsafe_allow_html=True,

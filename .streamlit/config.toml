@@ -1,0 +1,9 @@
+# Pin a clean, high-contrast light theme so the UI renders consistently for every
+# viewer (independent of their browser/OS dark-mode preference).
+[theme]
+base = "light"
+primaryColor = "#2563eb"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f7fb"
+textColor = "#1a1a2e"
+font = "sans serif"
