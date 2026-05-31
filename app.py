@@ -309,6 +309,31 @@ def render_day_map(day: dict):
     )
 
 
+def render_full_map(itinerary: dict):
+    """Full trip overview map: every stop, colour-coded by day, with a legend."""
+    rows = planner.build_map_rows(itinerary)
+    if not rows:
+        st.info("No map coordinates available for this itinerary.")
+        return
+    df = pd.DataFrame(rows)
+    layer = pdk.Layer(
+        "ScatterplotLayer", data=df, get_position="[lng, lat]",
+        get_fill_color="color", get_radius=90, radius_min_pixels=7,
+        radius_max_pixels=18, pickable=True,
+    )
+    spread = max(df["lat"].max() - df["lat"].min(), df["lng"].max() - df["lng"].min())
+    zoom = 13 if spread < 0.05 else 12 if spread < 0.15 else 11
+    view = pdk.ViewState(latitude=df["lat"].mean(), longitude=df["lng"].mean(), zoom=zoom)
+    tooltip = {"html": "<b>Day {day} · {time}</b><br/>{title}<br/>{location}"}
+    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view, tooltip=tooltip),
+                    use_container_width=True)
+    legend = "&nbsp;&nbsp;".join(
+        f"<span style='color:rgb({c[0]},{c[1]},{c[2]});font-size:1.1em'>●</span> Day {d}"
+        for d, c in sorted({r["day"]: r["color"] for r in rows}.items())
+    )
+    st.markdown(f"<div role='note' aria-label='Map legend'>{legend}</div>", unsafe_allow_html=True)
+
+
 def render_budget(itinerary: dict, prefs: dict):
     """Easy-to-read budget usage: a progress bar plus per-day cost metrics."""
     total = itinerary.get("estimated_total_cost", 0)
@@ -387,60 +412,66 @@ def render_itinerary(itinerary: dict, prefs: dict):
 
     st.info(itinerary.get("trip_summary", ""))
 
-    # Real-time grounding panel with citations
-    if st.session_state.realtime_summary or st.session_state.sources:
-        with st.expander("🌐 Real-time data used (Google Search grounding)", expanded=False):
-            if st.session_state.realtime_summary:
-                st.markdown(st.session_state.realtime_summary)
-            if st.session_state.sources:
-                st.markdown("**Sources:**")
-                for s in st.session_state.sources:
-                    st.markdown(f"- [{s['title']}]({s['uri']})")
-
-    render_constraint_panel(itinerary, prefs)
-
-    st.markdown("#### 💸 Budget")
-    render_budget(itinerary, prefs)
-
-    st.markdown("#### 🗓️ Day-by-day plan")
-    for day in itinerary.get("days", []):
-        day_num = day.get("day", "?")
-        theme = day.get("theme", "")
-        with st.expander(f"Day {day_num} — {theme}", expanded=(day_num == 1)):
-            # This day's stops on a map, shown in context above the activities
-            render_day_map(day)
-            for activity in day.get("activities", []):
-                title = activity.get("title", "?")
-                time = activity.get("time", "?")
-                location = activity.get("location", "?")
-                cost = activity.get("estimated_cost", 0)
-                mins = activity.get("duration_minutes", 0)
-                lat, lng = activity.get("lat"), activity.get("lng")
-
-                img_col, info_col = st.columns([1, 2])
-                with img_col:
-                    url, alt = fetch_image(planner.build_image_query(activity, prefs["destination"]))
-                    if url:
-                        render_image(url, alt or title, "act-img")
-                    else:
-                        st.markdown(
-                            f"<div class='act-img' style='background:linear-gradient(135deg,#06b6d4,#6366f1);"
-                            f"display:flex;align-items:center;justify-content:center;color:#fff;font-size:2rem' "
-                            f"role='img' aria-label='{title}'>📍</div>",
-                            unsafe_allow_html=True,
-                        )
-                with info_col:
-                    st.markdown(f"**{title}**  ·  🕐 {time}")
-                    st.markdown(activity.get("description", ""))
-                    st.markdown(f"📍 {location}  ·  💰 {cur} {cost:.0f}  ·  ⏱️ {mins} min")
-                    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and (lat or lng):
-                        st.markdown(f"[🗺️ Open in Google Maps]({planner.gmaps_link(lat, lng)})")
-                st.markdown("---")
-
     if st.session_state.correction_applied:
         st.info("ℹ️ Budget correction pass applied — costs were adjusted to fit your budget.")
     if st.session_state.disruption_applied:
         st.info("⚡ Disruption re-plan applied — the itinerary was updated for the disruption.")
+
+    # Clean, tab-based navigation (Stippl-style): Itinerary · Budget · Map · Live data
+    tab_plan, tab_budget, tab_map, tab_live = st.tabs(
+        ["🗓️ Itinerary", "💰 Budget", "🗺️ Map", "🌐 Live data"]
+    )
+
+    with tab_plan:
+        render_constraint_panel(itinerary, prefs)
+        for day in itinerary.get("days", []):
+            day_num = day.get("day", "?")
+            theme = day.get("theme", "")
+            with st.expander(f"Day {day_num} — {theme}", expanded=(day_num == 1)):
+                for activity in day.get("activities", []):
+                    title = activity.get("title", "?")
+                    time = activity.get("time", "?")
+                    location = activity.get("location", "?")
+                    cost = activity.get("estimated_cost", 0)
+                    mins = activity.get("duration_minutes", 0)
+                    lat, lng = activity.get("lat"), activity.get("lng")
+
+                    img_col, info_col = st.columns([1, 2])
+                    with img_col:
+                        url, alt = fetch_image(planner.build_image_query(activity, prefs["destination"]))
+                        if url:
+                            render_image(url, alt or title, "act-img")
+                        else:
+                            st.markdown(
+                                f"<div class='act-img' style='background:linear-gradient(135deg,#06b6d4,#6366f1);"
+                                f"display:flex;align-items:center;justify-content:center;color:#fff;font-size:2rem' "
+                                f"role='img' aria-label='{title}'>📍</div>",
+                                unsafe_allow_html=True,
+                            )
+                    with info_col:
+                        st.markdown(f"**{title}**  ·  🕐 {time}")
+                        st.markdown(activity.get("description", ""))
+                        st.markdown(f"📍 {location}  ·  💰 {cur} {cost:.0f}  ·  ⏱️ {mins} min")
+                        if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and (lat or lng):
+                            st.markdown(f"[🗺️ Open in Google Maps]({planner.gmaps_link(lat, lng)})")
+                    st.markdown("---")
+
+    with tab_budget:
+        render_budget(itinerary, prefs)
+
+    with tab_map:
+        render_full_map(itinerary)
+
+    with tab_live:
+        if st.session_state.realtime_summary or st.session_state.sources:
+            if st.session_state.realtime_summary:
+                st.markdown(st.session_state.realtime_summary)
+            if st.session_state.sources:
+                st.markdown("**Sources (Google Search grounding):**")
+                for s in st.session_state.sources:
+                    st.markdown(f"- [{s['title']}]({s['uri']})")
+        else:
+            st.info("Real-time data was not used for this plan. Toggle it on in the sidebar and regenerate.")
 
 
 def render_landing():
