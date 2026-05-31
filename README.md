@@ -1,187 +1,83 @@
 # 🌍 Travel Planner Engine
 
-An AI-powered travel planning application built with **Streamlit** and **Google Gemini API**. Generate structured, day-by-day itineraries and handle real-time disruptions with intelligent re-planning.
+An AI-powered, **agentic** travel planner built with **Streamlit** and the **Google Gemini API**. It turns your preferences and constraints into a structured, day-by-day itinerary — grounded in **real-time data** — and re-plans on the fly when disruptions hit.
+
+**Live demo:** https://promptwars-sdw2bzh7egvq4vwr3rimat.streamlit.app/
 
 ## ✨ Features
 
-- **AI Itinerary Generation** — Uses Gemini to create detailed, personalized travel plans
-- **Structured JSON Output** — Day-by-day activities with times, costs, and locations
-- **Budget Validation** — Automatically adjusts itineraries to fit your budget
-- **Real-Time Disruption Handling** — Re-plan affected parts when weather, closures, or delays occur
-- **Multi-Interest Support** — Food, History, Nature, Nightlife, Shopping, Art, Adventure
-- **Dietary Customization** — Vegetarian, Vegan, Halal, Gluten-Free options
-- **Flexible Travel Pace** — Relaxed, Balanced, or Packed schedules
+- **🧠 Agentic research → plan pipeline** — A grounded research step (live weather, prices, opening hours, closures) feeds a structured planning step using `gemini-2.5-flash` with schema-enforced JSON.
+- **🌐 Real-time grounding (Google Search)** — Itineraries and disruption re-plans are grounded in live web data, with **cited sources** shown in the app.
+- **✅ Constraint validation** — Programmatic checks for budget, trip length, must-see inclusion, avoid exclusion, daily time feasibility, and pace.
+- **🗺️ Interactive map** — Every activity plotted as a pin, color-coded by day, with hover tooltips and a legend.
+- **🖼️ Photos** — A destination hero image and per-day photos via the free Wikipedia API (cached, with graceful fallback and alt text).
+- **⚡ Instant re-planning + diff** — Inject a disruption (rain, closure, delay, budget cut) and see exactly what changed, with the cost delta.
+- **💸 Cost breakdown** — Per-day cost chart.
+- **🎨 Accessible, animated UI** — High-contrast text, alt text on images, semantic structure, keyboard focus styles, and an animated landing screen with a one-click sample trip.
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.8+
-- Google Gemini API key (get one free at [aistudio.google.com](https://aistudio.google.com/app/apikey))
+- Python 3.10+
+- A Google Gemini API key — free at [aistudio.google.com](https://aistudio.google.com/app/apikey)
 
 ### Installation
+```bash
+git clone https://github.com/mridulkhanna03-web/PromptWars.git
+cd PromptWars
+pip install -r requirements.txt
+cp .env.example .env          # then add your GEMINI_API_KEY
+streamlit run app.py
+```
+The app opens at `http://localhost:8501`.
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/PromptWars.git
-   cd PromptWars
-   ```
+## 🧪 Tests
 
-2. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+The pure planning logic lives in [`planner.py`](planner.py) with **no Streamlit/API/network dependencies**, so it is fully unit-testable offline.
 
-3. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your GEMINI_API_KEY
-   ```
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
 
-4. **Run the app**
-   ```bash
-   streamlit run app.py
-   ```
-
-5. **Open in browser**
-   - The app will automatically open at `http://localhost:8501`
-
-## 📖 Usage
-
-### Sidebar Inputs
-- **Destination**: Where you want to travel
-- **Trip Duration**: Number of days (1-30)
-- **Budget**: Total budget with currency (USD, EUR, GBP, INR)
-- **Interests**: Select multiple interests (food, history, nature, etc.)
-- **Travel Pace**: Relaxed (2-3 activities/day), Balanced (4-5), or Packed (6+)
-- **Dietary Needs**: Specify any dietary restrictions
-- **Must-See Places**: Specific attractions you don't want to miss
-- **Things to Avoid**: Places or activities to skip
-
-### Generate Itinerary
-Click **"Generate Itinerary"** to create a personalized plan. The app will:
-1. Call Gemini to generate a structured itinerary
-2. Validate it against your budget
-3. Automatically revise if costs exceed budget
-4. Display a clean, expandable day-by-day view
-
-### Handle Disruptions
-When something changes (weather, attraction closed, flight delayed, budget cut):
-1. Go to **"Inject a Real-Time Disruption"**
-2. Select a preset event or type a custom disruption
-3. Click **"Apply Disruption"**
-4. Gemini re-plans only affected parts while keeping other constraints
+27 tests cover prompt building, constraint validation (incl. accent-insensitive matching), the disruption diff, map-row extraction, cost breakdown, and Wikipedia helpers. They run automatically on every push via **GitHub Actions** ([.github/workflows/tests.yml](.github/workflows/tests.yml)) across Python 3.10–3.12.
 
 ## 🏗️ Architecture
 
-- **Single-file app** (`app.py`) — Easy to understand and modify
-- **Streamlit UI** — Responsive, no frontend framework needed
-- **Gemini 1.5 Flash** — Fast, cost-effective LLM for structured JSON tasks
-- **Minimal dependencies** — Just Streamlit, google-generativeai, python-dotenv
-- **No database** — Fully stateless session-based app
-
-## 📁 Project Structure
-
 ```
 PromptWars/
-├── app.py              # Main Streamlit application
-├── requirements.txt    # Python dependencies
-├── .env.example        # Environment template
-├── README.md          # This file
-├── SETUP.md           # Detailed setup guide
-└── .gitignore         # Git ignore rules
+├── app.py                       # Streamlit UI + Gemini API + image fetching
+├── planner.py                   # Pure logic: schema, prompts, validation, diff, map, image URLs
+├── tests/test_planner.py        # Offline unit tests (pytest)
+├── .github/workflows/tests.yml  # CI: run tests on push/PR
+├── requirements.txt             # App dependencies
+├── requirements-dev.txt         # App + pytest (CI)
+├── pytest.ini                   # Test config
+├── .env.example                 # API key template
+└── README.md
 ```
+
+- **Two-step agent** — Grounding can't combine with `response_schema` on Gemini 2.5, so a grounded *research* call gathers live facts, which then feed the structured *planning* call.
+- **Reliability** — Thinking is disabled on structured calls (it otherwise consumes the output-token budget and truncates JSON); output limit is raised for long trips; a clear error is shown if a plan is still too long.
+
+## 📖 Usage
+
+1. Set your trip preferences in the sidebar (destination, days, budget, interests, pace, dietary needs, must-sees, things to avoid).
+2. Toggle **🌐 real-time data** to ground the plan in live web results.
+3. Click **Generate Itinerary** (or **Try a sample trip**).
+4. Review the map, cost chart, constraint panel, and day-by-day plan with photos.
+5. **Inject a disruption** to watch the agent re-plan, with a before/after diff.
 
 ## 🔧 Configuration
 
-### Environment Variables
-Create a `.env` file with:
+`.env` (or Streamlit Cloud **Secrets**):
 ```
 GEMINI_API_KEY=your_api_key_here
 ```
 
-### Customization
-- **Model**: Change `gemini-1.5-flash` in `app.py` to use different Gemini models
-- **Temperature**: Adjust `temperature` parameter in `call_gemini()` for more/less creative responses
-- **Max Tokens**: Modify `max_output_tokens` for longer/shorter responses
-
-## 🧪 Example Usage
-
-**Trip to Paris**
-1. Destination: `Paris`
-2. Days: `3`
-3. Budget: `$1000 USD`
-4. Interests: `Food`, `History`
-5. Pace: `Balanced`
-
-**Expected Output**
-- Day 1: Eiffel Tower & Trocadéro, French Cafe Lunch, Local Bistro Dinner
-- Day 2: Louvre Museum, Seine River Cruise, Montmartre
-- Day 3: Notre-Dame, Latin Quarter, Champs-Élysées
-
-**Apply Disruption**
-- "Budget cut by 20%" → Itinerary revises to fit $800
-- "Museum closed" → Day 2 re-planned with alternatives
-
-## 🐛 Troubleshooting
-
-**ModuleNotFoundError: google.generativeai**
-```bash
-pip install google-generativeai
-```
-
-**GEMINI_API_KEY not found**
-- Verify `.env` file exists in project root
-- Check API key format: should be a long alphanumeric string
-- Restart Streamlit: `streamlit run app.py`
-
-**Port 8501 already in use**
-```bash
-streamlit run app.py --server.port 8502
-```
-
-**Failed to parse itinerary**
-- Rare occurrence; app has automatic retry logic
-- If persistent, check Gemini API quota
-- Try with a simpler destination/fewer days
-
-## 📊 Performance
-
-- **API Calls**: 1-3 per itinerary (initial + retry if needed + budget revision)
-- **Response Time**: 5-15 seconds for itinerary generation
-- **Token Usage**: ~1500-2000 tokens per itinerary
-- **Cost**: ~$0.01-0.03 per itinerary with Gemini Flash pricing
-
-## 🤝 Contributing
-
-Contributions welcome! Feel free to:
-- Report bugs
-- Suggest features
-- Submit pull requests
-- Improve documentation
-
 ## 📝 License
 
-This project is open source and available under the MIT License.
-
-## 🎓 Educational Context
-
-This is an educational project demonstrating:
-- Agentic AI workflows
-- JSON schema enforcement
-- Constraint-based re-planning
-- Streamlit web application development
-- Google Gemini API integration
-
-## 📚 Resources
-
-- [Streamlit Documentation](https://docs.streamlit.io/)
-- [Google Gemini API](https://ai.google.dev/)
-- [Python Documentation](https://docs.python.org/)
-
-## 👤 Author
-
-Created as part of PromptWars competition.
+Open source under the MIT License.
 
 ---
-
-**Ready to plan your next adventure?** 🌍✈️ Get your Gemini API key and start using the Travel Planner Engine today!
+Built for the PromptWars competition. Plans are AI estimates — verify hours and prices before you travel.

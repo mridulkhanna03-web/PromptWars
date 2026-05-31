@@ -1,0 +1,5 @@
+# Dependencies for running the test suite (CI).
+# The planner.py unit tests are offline and only need pytest, but we install the
+# full app requirements so imports resolve identically to production.
+-r requirements.txt
+pytest>=7.4
